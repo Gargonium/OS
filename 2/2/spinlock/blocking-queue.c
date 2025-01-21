@@ -1,11 +1,7 @@
 #define _GNU_SOURCE
-#include <pthread.h>
 #include <assert.h>
 
-#include "queue.h"
-
-#define handle_error_en(en, msg) \
-            do { errno = en; perror(msg); exit(EXIT_FAILURE); } while (0)
+#include "blocking-queue.h"
 
 void *qmonitor(void *arg) {
 	queue_t *q = (queue_t *)arg;
@@ -43,40 +39,43 @@ queue_t* queue_init(int max_count) {
 		abort();
 	}
 
+	err = pthread_spin_init(&q->lock, PTHREAD_PROCESS_PRIVATE);
+	if (err) {
+		printf("queue_init: pthread_spin_init() failed: %s\n", strerror(err));
+		abort();
+	}
+
 	return q;
 }
 
 void queue_destroy(queue_t *q) {
-	// TODO: It's needed to implement this function
-	if (q != NULL) {
-		int err = pthread_cancel(q->qmonitor_tid);
-		if (err != 0) {
-			handle_error_en(err, "queue_destroy: pthread_cancel");
-		}
+	int tmp;
 
-		err = pthread_join(q->qmonitor_tid, NULL);
-		if (err != 0) {
-			handle_error_en(err, "queue_destroy: pthread_join");
-		}
+	if (!q) {
+		return;
+	}
 
-		qnode_t *current = q->first;
-		while(current != NULL) {
-			qnode_t *next = current->next;
-			free(current);
-			current = next;
-		}
-
-		free(q);
-	}	
+	pthread_cancel(q->qmonitor_tid);
+    pthread_join(q->qmonitor_tid, NULL);
+	while (q->count > 0) {
+		queue_get(q, &tmp);
+	}
+    
+	pthread_spin_destroy(&q->lock);
+	free(q);
 }
 
 int queue_add(queue_t *q, int val) {
+	pthread_spin_lock(&q->lock);
+
 	q->add_attempts++;
 
 	assert(q->count <= q->max_count);
 
-	if (q->count == q->max_count)
+	if (q->count == q->max_count) {
+		pthread_spin_unlock(&q->lock);
 		return 0;
+	}
 
 	qnode_t *new = malloc(sizeof(qnode_t));
 	if (!new) {
@@ -87,9 +86,9 @@ int queue_add(queue_t *q, int val) {
 	new->val = val;
 	new->next = NULL;
 
-	if (!q->first)
+	if (!q->first) {
 		q->first = q->last = new;
-	else {
+	} else {
 		q->last->next = new;
 		q->last = q->last->next;
 	}
@@ -97,33 +96,42 @@ int queue_add(queue_t *q, int val) {
 	q->count++;
 	q->add_count++;
 
+	pthread_spin_unlock(&q->lock);
+
 	return 1;
 }
 
 int queue_get(queue_t *q, int *val) {
+	pthread_spin_lock(&q->lock);
+
 	q->get_attempts++;
 
 	assert(q->count >= 0);
 
-	if (q->count == 0)
+	if (q->count == 0) {
+		pthread_spin_unlock(&q->lock);
 		return 0;
+	}
 
 	qnode_t *tmp = q->first;
-
 	*val = tmp->val;
 	q->first = q->first->next;
 
 	free(tmp);
+
 	q->count--;
 	q->get_count++;
+
+	pthread_spin_unlock(&q->lock);
 
 	return 1;
 }
 
 void queue_print_stats(queue_t *q) {
+	pthread_spin_lock(&q->lock);
 	printf("queue stats: current size %d; attempts: (%ld %ld %ld); counts (%ld %ld %ld)\n",
 		q->count,
 		q->add_attempts, q->get_attempts, q->add_attempts - q->get_attempts,
-		q->add_count, q->get_count, q->add_count -q->get_count);
+		q->add_count, q->get_count, q->add_count - q->get_count);
+	pthread_spin_unlock(&q->lock);
 }
-
