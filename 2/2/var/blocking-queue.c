@@ -4,6 +4,9 @@
 
 #include "blocking-queue.h"
 
+#define handle_error_en(en, msg) do { errno = en; perror(msg); abort(); } while (0)
+#define handle_error(msg) do { perror(msg); abort(); } while (0)
+
 void *qmonitor(void *arg) {
     blocking_queue_t *q = (blocking_queue_t *)arg;
 
@@ -21,9 +24,8 @@ blocking_queue_t* blocking_queue_init(int max_count) {
     int err;
 
     blocking_queue_t *q = malloc(sizeof(blocking_queue_t));
-    if (!q) {
-        printf("Cannot allocate memory for a queue\n");
-        abort();
+    if (q == NULL) {
+        handle_error("Cannot allocate memory for a queue");
     }
 
     q->first = NULL;
@@ -33,26 +35,22 @@ blocking_queue_t* blocking_queue_init(int max_count) {
 
     q->add_attempts = q->get_attempts = 0;
     q->add_count = q->get_count = 0;
-
-    if (pthread_mutex_init(&q->lock, NULL) != 0) {
-        printf("Failed to initialize the spinlock\n");
-        abort();
+    err = pthread_mutex_init(&q->lock, NULL);
+    if (err != 0) {
+        handle_error_en(err, "Failed to initialize the mutex");
     }
-
-    if (pthread_cond_init(&q->not_empty, NULL) != 0) {
-        printf("Failed to initialize the not_empty condition variable\n");
-        abort();
+    err = pthread_cond_init(&q->not_empty, NULL);
+    if (err != 0) {
+        handle_error_en(err, "Failed to initialize the not_empty condition variable");
     }
-
-    if (pthread_cond_init(&q->not_full, NULL) != 0) {
-        printf("Failed to initialize the not_full condition variable\n");
-        abort();
+    err = pthread_cond_init(&q->not_full, NULL);
+    if (err != 0) {
+        handle_error_en(err, "Failed to initialize the not_full condition variable");
     }
 
     err = pthread_create(&q->qmonitor_tid, NULL, qmonitor, q);
-    if (err) {
-        printf("blocking_queue_init: pthread_create() failed: %s\n", strerror(err));
-        abort();
+    if (err != 0) {
+        handle_error_en(err, "blocking_queue_init: pthread_create() failed");
     }
 
     return q;

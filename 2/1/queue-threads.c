@@ -15,6 +15,9 @@
 #define RED "\033[41m"
 #define NOCOLOR "\033[0m"
 
+#define handle_error_en(en, msg) do { errno = en; perror(msg); abort(); } while (0)
+#define handle_error(msg) do { perror(msg); abort(); } while (0)
+
 void set_cpu(int n) {
 	int err;
 	cpu_set_t cpuset;
@@ -24,8 +27,8 @@ void set_cpu(int n) {
 	CPU_SET(n, &cpuset);
 
 	err = pthread_setaffinity_np(tid, sizeof(cpu_set_t), &cpuset);
-	if (err) {
-		printf("set_cpu: pthread_setaffinity failed for cpu %d\n", n);
+	if (err != 0) {
+		handle_error_en(err, "set_cpu: pthread_setaffinity failed\n");
 		return;
 	}
 
@@ -78,25 +81,19 @@ int main() {
 
 	printf("main [%d %d %d]\n", getpid(), getppid(), gettid());
 
-	q = queue_init(1000000000);
+	q = queue_init(100000);
 
 	err = pthread_create(&tid, NULL, reader, q);
-	if (err) {
-		printf("main: pthread_create() failed: %s\n", strerror(err));
-		return -1;
+	if (err != 0) {
+		handle_error_en(err, "main: pthread_create() failed\n");
 	}
 
 	sched_yield();
 
 	err = pthread_create(&tid, NULL, writer, q);
-	if (err) {
-		printf("main: pthread_create() failed: %s\n", strerror(err));
-		return -1;
+	if (err != 0) {
+		handle_error_en(err, "main: pthread_create() failed\n");
 	}
 
-	// TODO: join threads
-
 	pthread_exit(NULL);
-
-	return 0;
 }

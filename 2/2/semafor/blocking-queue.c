@@ -5,6 +5,9 @@
 
 #include "blocking-queue.h"
 
+#define handle_error_en(en, msg) do { errno = en; perror(msg); abort(); } while (0)
+#define handle_error(msg) do { perror(msg); abort(); } while (0)
+
 void *qmonitor(void *arg) {
     blocking_queue_t *q = (blocking_queue_t *)arg;
 
@@ -22,7 +25,7 @@ blocking_queue_t* blocking_queue_init(int max_count) {
     int err;
 
     blocking_queue_t *q = malloc(sizeof(blocking_queue_t));
-    if (!q) {
+    if (q == NULL) {
         printf("Cannot allocate memory for a queue\n");
         abort();
     }
@@ -35,14 +38,22 @@ blocking_queue_t* blocking_queue_init(int max_count) {
     q->add_attempts = q->get_attempts = 0;
     q->add_count = q->get_count = 0;
 
-    sem_init(&q->empty, 0, max_count);
-    sem_init(&q->full, 0, 0);
-    sem_init(&q->lock, 0, 1);
+    err = sem_init(&q->empty, 0, max_count);
+    if (err != 0) {
+        handle_error("queue_init sem_init empty");
+    }
+    err = sem_init(&q->full, 0, 0);
+    if (err != 0) {
+        handle_error("queue_init sem_init full");
+    }
+    err = sem_init(&q->lock, 0, 1);
+    if (err != 0) {
+        handle_error("queue_init sem_init lock");
+    }
 
     err = pthread_create(&q->qmonitor_tid, NULL, qmonitor, q);
-    if (err) {
-        printf("blocking_queue_init: pthread_create() failed: %s\n", strerror(err));
-        abort();
+    if (err != 0) {
+        handle_error_en(err, "blocking_queue_init: pthread_create() failed");
     }
 
     return q;
@@ -53,12 +64,24 @@ void blocking_queue_destroy(blocking_queue_t **q) {
         return;
     }
 
-    sem_destroy(&(*q)->empty);
-    sem_destroy(&(*q)->full);
-    sem_destroy(&(*q)->lock);
+    int err = sem_destroy(&(*q)->empty); 
+    if (err != 0) {
+        handle_error("queue_destroy sem_destroy empty");
+    }
+    err = sem_destroy(&(*q)->full);
+    if (err != 0) {
+        handle_error("queue_destroy sem_destroy full");
+    }
+    err = sem_destroy(&(*q)->lock);
+    if (err != 0) {
+        handle_error("queue_destroy sem_destroy lock");
+    }
 
     pthread_cancel((*q)->qmonitor_tid);
-    pthread_join((*q)->qmonitor_tid, NULL);
+    err = pthread_join((*q)->qmonitor_tid, NULL);
+    if (err != 0) {
+        handle_error_en(err, "blocking_queue_destroy _pthread_join");
+    }
 
     while ((*q)->first) {
         qnode_t* tmp = (*q)->first;
@@ -76,7 +99,10 @@ int blocking_queue_add(blocking_queue_t *q, int val) {
 
     assert(q->count <= q->max_count);
 
-    sem_wait(&q->empty);
+    int err = sem_wait(&q->empty);
+    if (err != 0) {
+        handle_error("queue_add sem_wait empty");
+    }
 
     qnode_t *new = malloc(sizeof(qnode_t));
     if (!new) {
@@ -87,7 +113,10 @@ int blocking_queue_add(blocking_queue_t *q, int val) {
     new->val = val;
     new->next = NULL;
 
-    sem_wait(&q->lock);
+    err = sem_wait(&q->lock);
+    if (err != 0) {
+        handle_error("queue_add sem_wait lock");
+    }
 
     if (!q->first)
         q->first = q->last = new;
@@ -99,8 +128,14 @@ int blocking_queue_add(blocking_queue_t *q, int val) {
     q->count++;
     q->add_count++;
 
-    sem_post(&q->full);
-    sem_post(&q->lock);
+    err = sem_post(&q->full);
+    if (err != 0) {
+        handle_error("queue_add sem_post full");
+    }
+    err = sem_post(&q->lock);
+    if (err != 0) {
+        handle_error("queue_add sem_post lock");
+    }
 
     return 1;
 }
@@ -110,9 +145,15 @@ int blocking_queue_get(blocking_queue_t *q, int *val) {
 
     assert(q->count >= 0);
 
-    sem_wait(&q->full);
+    int err = sem_wait(&q->full);
+    if (err != 0) {
+        handle_error("queue_get sem_wait full");
+    }
 
-    sem_wait(&q->lock);
+    err = sem_wait(&q->lock);
+    if (err != 0) {
+        handle_error("queue_get sem_wait lock");
+    }
 
     qnode_t *tmp = q->first;
 
@@ -123,9 +164,15 @@ int blocking_queue_get(blocking_queue_t *q, int *val) {
     q->count--;
     q->get_count++;
 
-    sem_post(&q->empty);
+    err = sem_post(&q->empty);
+    if (err != 0) {
+        handle_error("queue_get sem_post empty");
+    }
 
-    sem_post(&q->lock);
+    err = sem_post(&q->lock);
+    if (err != 0) {
+        handle_error("queue_get sem_post lock");
+    }
 
     return 1;
 }

@@ -3,6 +3,9 @@
 
 #include "blocking-queue.h"
 
+#define handle_error_en(en, msg) do { errno = en; perror(msg); abort(); } while (0)
+#define handle_error(msg) do { perror(msg); abort(); } while (0)
+
 void *qmonitor(void *arg) {
 	queue_t *q = (queue_t *)arg;
 
@@ -34,15 +37,13 @@ queue_t* queue_init(int max_count) {
 	q->add_count = q->get_count = 0;
 
 	err = pthread_create(&q->qmonitor_tid, NULL, qmonitor, q);
-	if (err) {
-		printf("queue_init: pthread_create() failed: %s\n", strerror(err));
-		abort();
+	if (err != 0) {
+		handle_error_en(err, "queue_init: pthread_create() failed");
 	}
 
 	err = pthread_spin_init(&q->lock, PTHREAD_PROCESS_PRIVATE);
-	if (err) {
-		printf("queue_init: pthread_spin_init() failed: %s\n", strerror(err));
-		abort();
+	if (err != 0) {
+		handle_error_en(err, "queue_init: pthread_spin_init() failed");
 	}
 
 	return q;
@@ -56,7 +57,10 @@ void queue_destroy(queue_t *q) {
 	}
 
 	pthread_cancel(q->qmonitor_tid);
-    pthread_join(q->qmonitor_tid, NULL);
+    int err =  pthread_join(q->qmonitor_tid, NULL);
+	if (err != 0) {
+		handle_error_en(err, ("queue_destroy pthread_join"));
+	}
 	while (q->count > 0) {
 		queue_get(q, &tmp);
 	}
@@ -78,9 +82,8 @@ int queue_add(queue_t *q, int val) {
 	}
 
 	qnode_t *new = malloc(sizeof(qnode_t));
-	if (!new) {
-		printf("Cannot allocate memory for new node\n");
-		abort();
+	if (new == NULL) {
+		handle_error("Cannot allocate memory for new node");
 	}
 
 	new->val = val;

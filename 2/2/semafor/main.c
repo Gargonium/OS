@@ -54,10 +54,10 @@ void *writer(void *arg) {
 	blocking_queue_t *q = (blocking_queue_t *)arg;
 	printf("writer [%d %d %d]\n", getpid(), getppid(), gettid());
 
-	set_cpu(1);
+	set_cpu(2);
 
 	while (1) {
-        // usleep(1);
+        //usleep(1);
 		int ok = blocking_queue_add(q, i);
 		if (!ok)
 			continue;

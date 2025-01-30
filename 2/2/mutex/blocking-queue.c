@@ -4,6 +4,9 @@
 
 #include "blocking-queue.h"
 
+#define handle_error_en(en, msg) do { errno = en; perror(msg); abort(); } while (0)
+#define handle_error(msg) do { perror(msg); abort(); } while (0)
+
 void *qmonitor(void *arg) {
     blocking_queue_t *q = (blocking_queue_t *)arg;
 
@@ -18,7 +21,6 @@ void *qmonitor(void *arg) {
 }
 
 blocking_queue_t* blocking_queue_init(int max_count) {
-    int err;
 
     blocking_queue_t *q = malloc(sizeof(blocking_queue_t));
     if (!q) {
@@ -34,15 +36,15 @@ blocking_queue_t* blocking_queue_init(int max_count) {
     q->add_attempts = q->get_attempts = 0;
     q->add_count = q->get_count = 0;
 
-    if (pthread_mutex_init(&q->lock, NULL) != 0) {
-        printf("Failed to initialize the spinlock\n");
-        abort();
+    int err = pthread_mutex_init(&q->lock, NULL);
+
+    if (err != 0) {
+        handle_error_en(err, "Failed to initialize the spinlock");
     }
 
     err = pthread_create(&q->qmonitor_tid, NULL, qmonitor, q);
-    if (err) {
-        printf("blocking_queue_init: pthread_create() failed: %s\n", strerror(err));
-        abort();
+    if (err != 0) {
+        handle_error_en(err, "blocking_queue_init: pthread_create() failed");
     }
 
     return q;
@@ -62,7 +64,10 @@ void blocking_queue_destroy(blocking_queue_t **q) {
     }
 
     pthread_cancel((*q)->qmonitor_tid);
-    pthread_join((*q)->qmonitor_tid, NULL);
+    int err = pthread_join((*q)->qmonitor_tid, NULL);
+    if (err != 0) {
+        handle_error_en(err, "blocking_queue_destroy pthread_join");
+    }
 
     pthread_mutex_t lock = (*q)->lock;
     pthread_mutex_destroy(&(*q)->lock);
@@ -86,7 +91,7 @@ int blocking_queue_add(blocking_queue_t *q, int val) {
     }
 
     qnode_t *new = malloc(sizeof(qnode_t));
-    if (!new) {
+    if (new == NULL) {
         printf("Cannot allocate memory for a new node\n");
         pthread_mutex_unlock(&q->lock);
         abort();
