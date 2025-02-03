@@ -54,10 +54,10 @@ void *writer(void *arg) {
 	blocking_queue_t *q = (blocking_queue_t *)arg;
 	printf("writer [%d %d %d]\n", getpid(), getppid(), gettid());
 
-	set_cpu(1);
+	set_cpu(2);
 
 	while (1) {
-        usleep(1);
+        //usleep(1);
 		int ok = blocking_queue_add(q, i);
 		if (!ok)
 			continue;
@@ -74,7 +74,7 @@ int main() {
 
 	printf("main [%d %d %d]\n", getpid(), getppid(), gettid());
 
-	q = blocking_queue_init(1000000);
+	q = blocking_queue_init(10000);
 
 	err = pthread_create(&tid1, NULL, reader, q);
 	if (err) {
@@ -82,7 +82,7 @@ int main() {
 		return -1;
 	}
 
-	sched_yield();
+	//sched_yield();
 
 	err = pthread_create(&tid2, NULL, writer, q);
 	if (err) {

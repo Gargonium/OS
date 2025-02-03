@@ -95,7 +95,9 @@ void blocking_queue_destroy(blocking_queue_t **q) {
 }
 
 int blocking_queue_add(blocking_queue_t *q, int val) {
+    sem_wait(&q->lock);
     q->add_attempts++;
+    sem_post(&q->lock);
 
     assert(q->count <= q->max_count);
 

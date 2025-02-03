@@ -79,6 +79,7 @@ void blocking_queue_destroy(blocking_queue_t **q) {
 }
 
 int blocking_queue_add(blocking_queue_t *q, int val) {
+
     pthread_mutex_lock(&q->lock);
 
     q->add_attempts++;
@@ -116,8 +117,9 @@ int blocking_queue_add(blocking_queue_t *q, int val) {
 }
 
 int blocking_queue_get(blocking_queue_t *q, int *val) {
+
     pthread_mutex_lock(&q->lock);
-    
+
     q->get_attempts++;
 
     assert(q->count >= 0);
