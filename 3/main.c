@@ -18,23 +18,14 @@
 #define YELLOW "\033[33m"
 #define BLUE "\033[34m"
 
+#define handle_error_en(en, msg) do { errno = en; perror(msg); pthread_exit(NULL); } while (0)
+#define handle_error(msg) do { perror(msg); pthread_exit(NULL); } while (0)
+
 // Структура для передачи данных в потоки
 typedef struct {
     char src[MAX_PATH];
     char dest[MAX_PATH];
 } thread_data_t;
-
-// Счетчик активных потоков и мьютекс для его защиты
-static int active_threads = 0;
-static pthread_mutex_t thread_count_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t thread_count_cond = PTHREAD_COND_INITIALIZER;
-
-void decrease_active_threads() {
-    pthread_mutex_lock(&thread_count_mutex);
-    active_threads--;
-    pthread_cond_signal(&thread_count_cond);
-    pthread_mutex_unlock(&thread_count_mutex);
-}
 
 char* get_directory_name(const char* path) {
     // Создаем копию строки, так как basename модифицирует исходный путь
@@ -61,7 +52,7 @@ void *copy_file(void *arg) {
     thread_data_t *data = (thread_data_t *)arg;
 
     int src_fd, dest_fd;
-    char buffer[4096];
+    char buffer[1024*16];
     ssize_t bytes_read, bytes_written;
     struct stat src_stat;
 
@@ -71,7 +62,6 @@ void *copy_file(void *arg) {
         fprintf(stderr, "Source: %s\n", data->src);
         printf(NOCOLOR);
         free(data);
-        decrease_active_threads();
         pthread_exit(NULL);
     }
 
@@ -84,7 +74,6 @@ void *copy_file(void *arg) {
         perror(RED"Failed to open source file");
         printf(NOCOLOR);
         free(data);
-        decrease_active_threads();
         pthread_exit(NULL);
     }
 
@@ -96,20 +85,29 @@ void *copy_file(void *arg) {
     }
 
     if (dest_fd == -1) {
-        perror(RED"Failed to create destination file");
-        printf(NOCOLOR);
+        fprintf(stderr, "Failed to create destination file '%s'", data->dest);
+        perror(" ");
         close(src_fd);
         free(data);
-        decrease_active_threads();
         pthread_exit(NULL);
     }
 
     // Копируем данные
     while ((bytes_read = read(src_fd, buffer, sizeof(buffer))) > 0) {
-        bytes_written = write(dest_fd, buffer, bytes_read);
-        if (bytes_written != bytes_read) {
-            perror(RED"Write error");
-            printf(NOCOLOR);
+        ssize_t total_written = 0;
+
+        while (total_written < bytes_read) {
+            bytes_written = write(dest_fd, &(buffer[total_written]), bytes_read - total_written);
+            if (bytes_written == -1) {
+                perror(RED"Write error");
+                printf(NOCOLOR);
+                break;
+            }
+
+            total_written += bytes_written;
+        }
+
+        if (total_written != bytes_read) {
             break;
         }
     }
@@ -123,8 +121,6 @@ void *copy_file(void *arg) {
     close(dest_fd);
     free(data);
 
-    decrease_active_threads();
-
     pthread_exit(NULL);
 }
 
@@ -136,6 +132,7 @@ void *copy_directory(void *arg) {
     struct stat statbuf;
     struct stat src_stat;
     pthread_t thread;
+    int err;
 
     // Получаем права доступа исходного каталога
     if (stat(data->src, &src_stat) == -1) {
@@ -143,7 +140,6 @@ void *copy_directory(void *arg) {
         fprintf(stderr, "Source directory: %s\n", data->src);
         printf(NOCOLOR);
         free(data);
-        decrease_active_threads();
         pthread_exit(NULL);
     }
 
@@ -160,18 +156,17 @@ void *copy_directory(void *arg) {
         printf(NOCOLOR);
         free(data);
         free(entry_buf);
-        decrease_active_threads();
         pthread_exit(NULL);
     }
 
     // Создаем целевой каталог
     if (mkdir(data->dest, src_stat.st_mode) == -1 && errno != EEXIST) {
         perror(RED"Failed to create destination directory");
+        printf("%s", data->dest);
         printf(NOCOLOR);
         closedir(src_dir);
         free(data);
         free(entry_buf);
-        decrease_active_threads();
         pthread_exit(NULL);
     }
 
@@ -208,27 +203,45 @@ void *copy_directory(void *arg) {
             continue;
         }
 
-        pthread_mutex_lock(&thread_count_mutex);
-        active_threads++;
-        pthread_mutex_unlock(&thread_count_mutex);
-
         if (S_ISDIR(statbuf.st_mode)) {
-            pthread_create(&thread, NULL, copy_directory, new_data);
-            pthread_detach(thread);
+            err = pthread_create(&thread, NULL, copy_directory, new_data);
+            if (err != 0) {
+                closedir(src_dir);
+                free(data);
+                free(entry_buf);
+                handle_error_en(err, "dir create pthread create error");
+            }
+
+            err = pthread_detach(thread);
+            if (err != 0) {
+                closedir(src_dir);
+                free(data);
+                free(entry_buf);    
+                handle_error_en(err, "dir create pthread detach error");
+            }
         } else if (S_ISREG(statbuf.st_mode)) {
-            pthread_create(&thread, NULL, copy_file, new_data);
-            pthread_detach(thread);
+            err = pthread_create(&thread, NULL, copy_file, new_data);
+            if (err != 0) {
+                closedir(src_dir);
+                free(data);
+                free(entry_buf);
+                handle_error_en(err,"reg create pthread create error");
+            }
+            err = pthread_detach(thread);
+            if (err != 0) {
+                closedir(src_dir);
+                free(data);
+                free(entry_buf);
+                handle_error_en(err, "reg create pthread detach error");
+            }
         } else {
             free(new_data); // Игнорируем другие типы файлов
-            decrease_active_threads();
         }
     }
 
     closedir(src_dir);
     free(data);
     free(entry_buf);
-
-    decrease_active_threads();
 
     pthread_exit(NULL);
 }
@@ -248,29 +261,27 @@ int main(int argc, char *argv[]) {
 
     char dst_path[MAX_PATH];
 
-    create_new_path(argv[2], get_directory_name(argv[1]), dst_path);
+    // Проверяем существование целевого каталога
+    if (access(argv[2], F_OK) != 0) {
+        strcpy(dst_path, argv[2]);
+    } else {
+        create_new_path(argv[2], get_directory_name(argv[1]), dst_path);
+    }
 
     // Создаем структуру данных для потока
     thread_data_t *data = malloc(sizeof(thread_data_t));
     snprintf(data->src, MAX_PATH, "%s", argv[1]);
     snprintf(data->dest, MAX_PATH, "%s", dst_path);
 
-    pthread_mutex_lock(&thread_count_mutex);
-    active_threads++;
-    pthread_mutex_unlock(&thread_count_mutex);
-
     pthread_t thread;
-    pthread_create(&thread, NULL, copy_directory, data);
-    pthread_detach(thread);
-
-    // Ожидание завершения всех потоков
-    pthread_mutex_lock(&thread_count_mutex);
-    while (active_threads > 0) {
-        pthread_cond_wait(&thread_count_cond, &thread_count_mutex);
+    int err = pthread_create(&thread, NULL, copy_directory, data);
+    if (err != 0) {
+        handle_error_en(err, "main pthread_create error");
     }
-    pthread_mutex_unlock(&thread_count_mutex);
+    err = pthread_detach(thread);
+    if (err != 0) {
+        handle_error_en(err, "main pthread_detach error");
+    }
 
-    //printf("All threads completed. Copy operation finished.\n");
-
-    return EXIT_SUCCESS;
+    pthread_exit(NULL);
 }
